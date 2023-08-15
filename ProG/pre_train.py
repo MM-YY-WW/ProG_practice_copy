@@ -151,6 +151,7 @@ if __name__ =='__main__':
     pt = PreTrain(pretext, gnn_type, input_dim, hid_dim, gln=2)
 
     pt.train(dataname, graph_list, batch_size=10, aug1='dropN', aug2 ='permE', aug_ratio=None, lr=0.01, decay=0.0001, epochs=100)
+    
 
 
            
