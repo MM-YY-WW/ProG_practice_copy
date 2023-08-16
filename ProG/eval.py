@@ -99,4 +99,84 @@ class Evaluator:
             mrr_list = 1./ranking_list.astype(np.float32)
             return mrr_list.mean()
 
+def mrr_hit(normal_label: np.ndarray, pos_out: np.ndarray, metric: list = None):
+    if isinstance(normal_label, np.ndarray) and isinstance(pos_out, np.ndarray):
+        pass
+    else:
+        warnings.warn('it would be better if normal_label and out are all set up as np.ndarray')
+
+    results = {}
+    if not metric:
+        metric = ['mrr', 'hits']
+
+    if 'hits' in metric:
+        hits_evaluator = Evaluator(eval_metric='hits@50')
+        flag = normal_label
+        pos_test_pred = torch.from_numpy(pos_out[flag == 1])
+        neg_test_pred = torch.from_numpy(pos_out[flag == 0])
+
+        for N in [100]:
+            neg_test_pred_N = neg_test_pred.view(-1, 100)
+            for K in [1, 5, 10]:
+                hits_evaluator.K = K
+                test_hits = hits_evaluator.eval({
+                    'y_pred_pos': pos_test_pred,
+                    'y_pred_neg':neg_test_pred_N,
+                })[f'hits@{K}']
+
+                results[f'Hits@{K}@{N}'] = test_hits
+        
+    if 'mrr' in metric:
+        mrr_evaluator = Evaluator(eval_metric='mrr')
+        flag = normal_label
+        pos_test_pred = torch.from_numpy(pos_out[flag == 1])
+        neg_test_pred = torch.from_numpy(pos_out[flag == 0])
+        neg_test_pred = neg_test_pred.view(-1, 100)
+        mrr = mrr_evaluator.eval({
+            'y_pred_pos': pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })
+        if isinstance(mrr, torch.Tensor):
+            mrr = mrr.item()
+        results['mrr'] = mrr
+    return results
+
+def acc_f1_over_batches(test_loader, PG, gnn, answering, num_class, task_type):
+    if task_type == 'multi_class_classification':
+        #[Question] torchmetrics.classification seems does not exist
+        accuracy = torchmetrics.classification.Accuracy(task="multiclass", num_class=num_class)
+        macro_f1 = torchmetrics.classification.F1Score(task="multiclass", num_classes=num_class, average="macro")
+    else:
+        raise NotImplementedError
+    
+    for batch_id, test_batch in enumerate(test_loader):
+        if answering: # if answering is not None
+            prompted_graph = PG(test_batch)
+            graph_emb = gnn(prompted_graph.x, prompted_graph.edge_index, prompted_graph.batch)
+            #print(graph_emb)
+            pre = answering(graph_emb)
+        else: #if answering is None
+            emb0 = gnn(test_batch.x, test_batch.edge_index, test_batch.batch)
+            pg_batch = PG.token_view()
+            pg_emb = gnn(pg_batch.x, pg_batch.edge_index, pg_batch.batch)
+            dot = torch.mm(emb0, torch.transpose(pg_emb, 0, 1))
+
+            # if task_type == 'mult_class_classification':
+            pre = torch.softmax(dot, dim=1)
+        pre = pre.detach()
+        y = test_batch.y
+
+        pre_cla = torch.argmax(pre, dim=1)
+
+        acc = accuracy(pre_cla, y)
+        ma_f1 = macro_f1(pre_cla, y)
+        print("Batch {} Acc: {:.4f} | Macro-F1: {:.4f}".format(batch_id, acc.item(), ma_f1.item()))
+    acc = accuracy.compute()
+    ma_f1 = macro_f1.compute()
+    print("Final True Acc: {:.4f} | Macro-F1: {:.4f}".format(acc.item(), ma_f1.item()))
+    accuracy.reset()
+    macro_f1.reset()
+
+
+
 
